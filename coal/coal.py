@@ -39,42 +39,41 @@ import time
 import whisper
 
 
-UPDATE_INTERVAL = 60  # How often we log values, in seconds
-WINDOW_SPAN = UPDATE_INTERVAL * 5  # Size of sliding window, in seconds.
-RETENTION = 525949    # How many datapoints we retain. (One year's worth.)
-METRICS = (
-    'connectEnd',
-    'connectStart',
-    'dnsLookup',
-    'domainLookupStart',
-    'domainLookupEnd',
-    'domComplete',
-    'domContentLoadedEventStart',
-    'domContentLoadedEventEnd',
-    'domInteractive',
-    'fetchStart',
-    'firstPaint',
-    'loadEventEnd',
-    'loadEventStart',
-    'mediaWikiLoadComplete',
-    'mediaWikiLoadStart',
-    'mediaWikiLoadEnd',
-    'redirectCount',
-    'redirecting',
-    'redirectStart',
-    'redirectEnd',
-    'requestStart',
-    'responseEnd',
-    'responseStart',
-    'saveTiming',
-    'secureConnectionStart',
-    'unloadEventStart',
-    'unloadEventEnd',
-)
-ARCHIVES = [(UPDATE_INTERVAL, RETENTION)]
-
-
 class WhisperLogger(object):
+    UPDATE_INTERVAL = 60  # How often we log values, in seconds
+    WINDOW_SPAN = UPDATE_INTERVAL * 5  # Size of sliding window, in seconds.
+    RETENTION = 525949    # How many datapoints we retain. (One year's worth.)
+    METRICS = (
+        'connectEnd',
+        'connectStart',
+        'dnsLookup',
+        'domainLookupStart',
+        'domainLookupEnd',
+        'domComplete',
+        'domContentLoadedEventStart',
+        'domContentLoadedEventEnd',
+        'domInteractive',
+        'fetchStart',
+        'firstPaint',
+        'loadEventEnd',
+        'loadEventStart',
+        'mediaWikiLoadComplete',
+        'mediaWikiLoadStart',
+        'mediaWikiLoadEnd',
+        'redirectCount',
+        'redirecting',
+        'redirectStart',
+        'redirectEnd',
+        'requestStart',
+        'responseEnd',
+        'responseStart',
+        'saveTiming',
+        'secureConnectionStart',
+        'unloadEventStart',
+        'unloadEventEnd',
+    )
+    ARCHIVES = [(UPDATE_INTERVAL, RETENTION)]
+
     def __init__(self, args):
         self.args = args
 
@@ -167,9 +166,9 @@ class WhisperLogger(object):
             self.log.info(
                 'Skipping creating whisper files because dry-run flag is set')
             return
-        for metric in METRICS:
+        for metric in self.METRICS:
             try:
-                whisper.create(self.get_whisper_file(metric), ARCHIVES)
+                whisper.create(self.get_whisper_file(metric), self.ARCHIVES)
             except whisper.InvalidConfiguration:
                 pass  # Already exists.
 
@@ -208,7 +207,7 @@ class WhisperLogger(object):
             self.log.warning('No event data contained in message')
             return None
 
-        minute_boundary = int(timestamp - (timestamp % UPDATE_INTERVAL))
+        minute_boundary = int(timestamp - (timestamp % self.UPDATE_INTERVAL))
 
         # This is the first message that we've processed for this schema since
         # startup
@@ -226,7 +225,7 @@ class WhisperLogger(object):
             self.events[schema][minute_boundary] = {}
 
         event = meta['event']
-        for metric in METRICS:
+        for metric in self.METRICS:
             value = event.get(metric)
             if value:
                 if metric not in self.events[schema][minute_boundary]:
@@ -274,7 +273,7 @@ class WhisperLogger(object):
         #       1522072920: {}
         #   }
         #
-        if (timestamp - WINDOW_SPAN - UPDATE_INTERVAL) > self.oldest_boundary[schema]:
+        if (timestamp - self.WINDOW_SPAN - self.UPDATE_INTERVAL) > self.oldest_boundary[schema]:
             return self.flush_data(schema)
 
     #
@@ -320,8 +319,8 @@ class WhisperLogger(object):
             # it's been at least UPDATE_INTERVAL + WINDOW_SPAN since the oldest
             # boundary.
             #
-            if (oldest_boundary + WINDOW_SPAN + UPDATE_INTERVAL) > newest_boundary or \
-                    (oldest_boundary + WINDOW_SPAN + UPDATE_INTERVAL) > time.time():
+            if (oldest_boundary + self.WINDOW_SPAN + self.UPDATE_INTERVAL) > newest_boundary or \
+                    (oldest_boundary + self.WINDOW_SPAN + self.UPDATE_INTERVAL) > time.time():
                 self.log.debug('All windows with sufficient data have been processed')
                 self.log.debug('Returning last offset {}'.format(offset_to_return))
                 return offset_to_return
@@ -334,7 +333,7 @@ class WhisperLogger(object):
             # window.
             #
             boundaries_to_consider = [boundary for boundary in sorted_boundaries if
-                                      boundary < (oldest_boundary + WINDOW_SPAN)]
+                                      boundary < (oldest_boundary + self.WINDOW_SPAN)]
             self.log.info('[{}] Processing events in boundaries [{}]'.format(
                                                 schema, boundaries_to_consider))
 
@@ -353,7 +352,7 @@ class WhisperLogger(object):
                 median_value = self.median(values)
                 if self.args.dry_run:
                     self.log.info('[{}] [{}] {}'.format(metric,
-                                                        oldest_boundary + WINDOW_SPAN,
+                                                        oldest_boundary + self.WINDOW_SPAN,
                                                         median_value))
                     # If this is a dry run, we don't want to actually commit, but
                     self.log.debug('[{}] Dry run, so not actually committing to offset {}'.format(
@@ -361,7 +360,7 @@ class WhisperLogger(object):
                     offset_to_return = None
                 else:
                     whisper.update(self.get_whisper_file(metric), median_value,
-                                   timestamp=oldest_boundary + WINDOW_SPAN)
+                                   timestamp=oldest_boundary + self.WINDOW_SPAN)
 
             #
             # Return the highest offset from the oldest boundary, and then
