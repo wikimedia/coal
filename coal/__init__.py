@@ -3,11 +3,11 @@
 """
   coal
   ~~~~
-  Coal logs Navigation Timing metrics to Whisper files.
+  Coal logs Navigation Timing metrics to Graphite.
 
   More specifically, coal aggregates all of the samples for a given NavTiming
   metric that are collected within a period of time, and it writes the median
-  of those values to Whisper files.
+  of those values to Graphite.
 
   See the constants at the top of the file for configuration options.
 
@@ -31,15 +31,15 @@ import argparse
 from kafka import KafkaConsumer, TopicPartition
 from kafka.structs import OffsetAndMetadata
 import dateutil.parser
+import dateutil.tz
 import json
 import logging
-import os
-import os.path
+import pytz
+import socket
 import time
-import whisper
 
 
-class WhisperLogger(object):
+class Coal(object):
     UPDATE_INTERVAL = 60  # How often we log values, in seconds
     WINDOW_SPAN = UPDATE_INTERVAL * 5  # Size of sliding window, in seconds.
     RETENTION = 525949    # How many datapoints we retain. (One year's worth.)
@@ -74,14 +74,26 @@ class WhisperLogger(object):
     )
     ARCHIVES = [(UPDATE_INTERVAL, RETENTION)]
 
-    def __init__(self, args):
-        self.args = args
+    def __init__(self, brokers, consumer_group, schemas, graphite_host,
+                 graphite_port=2003, graphite_prefix='coal', dry_run=False,
+                 verbose=False):
+        self.brokers = brokers
+        self.consumer_group = consumer_group
+        self.schemas = schemas
+        self.graphite_host = graphite_host
+        self.graphite_port = graphite_port
+        if graphite_prefix[-1] == '.':
+            self.graphite_prefix = graphite_prefix[:-1]
+        else:
+            self.graphite_prefix = graphite_prefix
+        self.dry_run = dry_run
+        self.verbose = verbose
 
         # Log config
         self.log = logging.getLogger(__name__)
-        self.log.setLevel(logging.DEBUG if self.args.verbose else logging.INFO)
+        self.log.setLevel(logging.DEBUG if self.verbose else logging.INFO)
         ch = logging.StreamHandler()
-        ch.setLevel(logging.DEBUG if self.args.verbose else logging.INFO)
+        ch.setLevel(logging.DEBUG if self.verbose else logging.INFO)
         formatter = logging.Formatter(
             '%(asctime)s [%(levelname)s] (%(funcName)s:%(lineno)d) %(msg)s')
         formatter.converter = time.gmtime
@@ -122,7 +134,7 @@ class WhisperLogger(object):
         #       }
         #   }
         self.events = {}
-        for schema in self.args.schemas:
+        for schema in self.schemas:
             self.events[schema] = {}
 
         #
@@ -132,7 +144,7 @@ class WhisperLogger(object):
         # highest kafka offset seen within that boundary.
         #
         self.offsets = {}
-        for schema in self.args.schemas:
+        for schema in self.schemas:
             self.offsets[schema] = {}
 
         #
@@ -140,7 +152,7 @@ class WhisperLogger(object):
         # values for each schema
         #
         self.oldest_boundary = {}
-        for schema in self.args.schemas:
+        for schema in self.schemas:
             # This value will be reset the first time a message is read from Kafka
             self.oldest_boundary[schema] = None
 
@@ -158,19 +170,39 @@ class WhisperLogger(object):
         middle_terms = population[index] + population[index + 1]
         return middle_terms / 2.0
 
-    def get_whisper_file(self, metric):
-        return os.path.join(self.args.whisper_dir, metric + '.wsp')
-
-    def create_whisper_files(self):
-        if self.args.dry_run:
-            self.log.info(
-                'Skipping creating whisper files because dry-run flag is set')
-            return
-        for metric in self.METRICS:
+    # Submit metrics to graphite
+    #
+    # Use a short timeout, and if that timeout expires, then log the metric.
+    # It's not clear that there's any reason to expect this to happen
+    def send_to_graphite(self, metric, value, timestamp):
+        # Shouldn't ever get called anyway, but be defensive
+        if not self.dry_run:
             try:
-                whisper.create(self.get_whisper_file(metric), self.ARCHIVES)
-            except whisper.InvalidConfiguration:
-                pass  # Already exists.
+                # Use a TCP socket, so that we don't end up dropping data in the event
+                # that the remote end is unavailable
+                sock = socket.create_connection((self.graphite_host, self.graphite_port),
+                                                timeout=5)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.send('{}.{} {} {}\n'.format(self.graphite_prefix, metric, value,
+                                                 timestamp))
+                self.log.debug('[{}] [{}] Submitted {} to graphite at key {}.{}'.format(
+                    metric, timestamp, value, self.graphite_prefix, metric))
+            except Exception:
+                # Generally an exception should be logged at exception() level. In this
+                # case, we're intentionally not doing that.  This clause will generally
+                # only be hit if the graphite server is down or slow, and the stack
+                # trace isn't going to give us anything meaningful that we won't
+                # get elsewhere.
+                self.log.error('Failed to submit to graphite: {}.{} {} {}'.format(
+                                            self.graphite_prefix, metric, value, timestamp))
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    # This is extremely defensive programming.  Can't really imagine
+                    # what situation would result in sock.close() raising, but just
+                    # in case...
+                    pass
 
     #
     # Process an incoming event
@@ -188,17 +220,29 @@ class WhisperLogger(object):
             self.log.warning('Message received with no schema defined')
             return None
 
-        if schema not in self.args.schemas:
+        if schema not in self.schemas:
             self.log.warning('Message received with invalid schema')
             return None
 
         # dt is main EventCapsule timestamp field in ISO-8601
         if 'dt' in meta:
-            timestamp = int(dateutil.parser.parse(meta['dt']).strftime("%s"))
+            # Here be shennanigans.
+            #
+            # datetime's strftime() method is broken: https://bugs.python.org/issue12750
+            #
+            # To work around this, we can use time.mktime(), which takes a struct
+            # in _local_ time.  So:
+            #     1. Read the naive meta['dt'] parameter
+            #     2. Set the timezone to UTC (instead of None)
+            #     3. Change the timezone to local based on the system's setting
+            #     4. Use mktime to convert to a timestamp
+            dt = dateutil.parser.parse(meta['dt'])
+            dt = dt.replace(tzinfo=pytz.utc)
+            timestamp = int(time.mktime(dt.astimezone(dateutil.tz.tzlocal()).timetuple()))
         # timestamp is backwards compatible int, this shouldn't be used anymore.
         elif 'timestamp' in meta:
             timestamp = meta['timestamp']
-        # else we can't find one, just use the current time.
+        # else we can't find one, so return
         else:
             self.log.warning('Message received with no timestamp')
             return None
@@ -350,7 +394,7 @@ class WhisperLogger(object):
             # Get the median for each metric and write:
             for metric, values in metrics_with_samples.items():
                 median_value = self.median(values)
-                if self.args.dry_run:
+                if self.dry_run:
                     self.log.info('[{}] [{}] {}'.format(metric,
                                                         oldest_boundary + self.WINDOW_SPAN,
                                                         median_value))
@@ -359,14 +403,14 @@ class WhisperLogger(object):
                                             schema, self.offsets[schema][oldest_boundary]))
                     offset_to_return = None
                 else:
-                    whisper.update(self.get_whisper_file(metric), median_value,
-                                   timestamp=oldest_boundary + self.WINDOW_SPAN)
+                    self.send_to_graphite(metric=metric, value=median_value,
+                                          timestamp=oldest_boundary + self.WINDOW_SPAN)
 
             #
             # Return the highest offset from the oldest boundary, and then
             # delete the oldest boundary from the events and offsets dicts
             #
-            offset_to_return = None if self.args.dry_run else self.offsets[schema][oldest_boundary]
+            offset_to_return = None if self.dry_run else self.offsets[schema][oldest_boundary]
             del self.events[schema][oldest_boundary]
             del self.offsets[schema][oldest_boundary]
 
@@ -387,8 +431,6 @@ class WhisperLogger(object):
         self.log.info('[{}] Offset {} committed'.format(schema, offset_to_commit))
 
     def run(self):
-        self.create_whisper_files()
-
         # There are basically 3 ways to handle timers
         #  1. On each received Kafka message, check whether we've tipped over into
         #     the next window, and if so, do processing.  The problem with this
@@ -408,15 +450,15 @@ class WhisperLogger(object):
         while True:
             try:
                 self.log.info('Starting Kafka connection to brokers ({}).'.format(
-                    self.args.brokers))
+                    self.brokers))
                 consumer = KafkaConsumer(
-                    bootstrap_servers=self.args.brokers,
-                    group_id=self.args.consumer_group,
+                    bootstrap_servers=self.brokers,
+                    group_id=self.consumer_group,
                     enable_auto_commit=False)
 
                 # Work out topic names based on schemas, and subscribe to the
                 # appropriate topics
-                topics = [self.topic(schema) for schema in self.args.schemas]
+                topics = [self.topic(schema) for schema in self.schemas]
                 self.log.info('Subscribing to topics: {}'.format(topics))
                 consumer.subscribe(topics)
 
@@ -459,7 +501,7 @@ class WhisperLogger(object):
                 try:
                     # Take a stab at flushing any remaining data, just in case
                     self.log.info('Trying to commit any last data before exit')
-                    for schema in self.args.schemas:
+                    for schema in self.schemas:
                         offset_to_commit = self.flush_data(schema)
                         if offset_to_commit is not None:
                             self.commit(consumer, schema, offset_to_commit)
@@ -482,17 +524,27 @@ def main():
     arg_parser.add_argument('--schema', required=True, action='append',
                             dest='schemas',
                             help='Schemas that we deal with, topic names are derived')
-    arg_parser.add_argument('--whisper-dir', default=os.getcwd(),
-                            required=False,
-                            help='Path for Whisper files.  Defaults to current working dir')
+    arg_parser.add_argument('--graphite-host', required=True, dest='graphite_host',
+                            help='Host to which graphite metrics are sent')
+    arg_parser.add_argument('--graphite-port', required=False, dest='graphite_port',
+                            type=int, default=2003, help='Graphite plaintext port')
+    arg_parser.add_argument('--graphite-prefix', required=False, dest='graphite_prefix',
+                            default='coal', help='Graphite metric path prefix')
     arg_parser.add_argument('-n', '--dry-run', required=False, dest='dry_run',
                             action='store_true', default=False,
-                            help='Don\'t create whisper files, just output')
+                            help='Don\'t send metrics, just log them')
     arg_parser.add_argument('-v', '--verbose', dest='verbose',
                             required=False, default=False, action='store_true',
                             help='Increase verbosity of output')
     args = arg_parser.parse_args()
-    app = WhisperLogger(args)
+    app = Coal(brokers=args.brokers,
+               consumer_group=args.consumer_group,
+               schemas=args.schemas,
+               graphite_host=args.graphite_host,
+               graphite_port=args.graphite_port,
+               graphite_prefix=args.graphite_prefix,
+               dry_run=args.dry_run,
+               verbose=args.verbose)
     app.run()
 
 

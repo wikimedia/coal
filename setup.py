@@ -19,7 +19,8 @@ setup(
         'python-dateutil',
         'whisper',
         'flask',
-        'numpy'
+        'numpy',
+        'pytz'
     ],
     test_suite='nose.collector',
     tests_require=['nose'],
