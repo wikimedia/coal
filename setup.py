@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from setuptools import setup
+import os
 
 setup(
     name='coal',
@@ -9,7 +10,7 @@ setup(
     url='https://wikitech.wikimedia.org/wiki/Performance.wikimedia.org#Coal',
     license='Apache 2.0',
     description='Performance team website and metrics processing',
-    long_description=open('README').read(),
+    long_description=open(os.path.join(os.path.dirname(__file__), 'README')).read(),
     packages=[
         'coal'
     ],
