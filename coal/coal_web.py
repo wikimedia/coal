@@ -131,3 +131,12 @@ class CoalWeb(object):
 
     def run(self):
         self.app.run(debug=True)
+
+
+def main():
+    app = CoalWeb()
+    app.run()
+
+
+if __name__ == '__main__':
+    main()

@@ -25,7 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'coal = coal:main',
-            'coal-web = coal:web'
+            'coal-web = coal.coal_web:main'
         ],
     }
 )
