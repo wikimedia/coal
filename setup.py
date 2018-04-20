@@ -20,7 +20,8 @@ setup(
         'whisper',
         'flask',
         'numpy',
-        'pytz'
+        'pytz',
+        'python-etcd'
     ],
     test_suite='nose.collector',
     tests_require=['nose'],
