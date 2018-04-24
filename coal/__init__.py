@@ -58,8 +58,6 @@ class Coal(object):
         'firstPaint',
         'loadEventEnd',
         'loadEventStart',
-        'mediaWikiLoadComplete',
-        'mediaWikiLoadStart',
         'mediaWikiLoadEnd',
         'redirectCount',
         'redirecting',
