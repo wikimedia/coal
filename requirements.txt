@@ -4,3 +4,4 @@ whisper
 flask
 numpy
 pytz
+python-etcd

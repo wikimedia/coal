@@ -28,6 +28,7 @@
 
 """
 import argparse
+import etcd
 from kafka import KafkaConsumer, TopicPartition
 from kafka.structs import OffsetAndMetadata
 import dateutil.parser
@@ -75,7 +76,8 @@ class Coal(object):
     ARCHIVES = [(UPDATE_INTERVAL, RETENTION)]
 
     def __init__(self, brokers, consumer_group, schemas, graphite_host,
-                 graphite_port=2003, graphite_prefix='coal', dry_run=False,
+                 graphite_port=2003, graphite_prefix='coal', datacenter=None,
+                 etcd_domain=None, etcd_path=None, etcd_refresh=10, dry_run=False,
                  verbose=False):
         self.brokers = brokers
         self.consumer_group = consumer_group
@@ -100,6 +102,18 @@ class Coal(object):
         ch.setFormatter(formatter)
         self.log.addHandler(ch)
 
+        # Set up etcd, if needed, and establish whether this is a session leader
+        self.master = True
+        self.master_last_updated = 0
+        self.datacenter = datacenter
+        self.etcd_path = etcd_path
+        self.etcd_refresh = etcd_refresh
+        if datacenter is not None and etcd_domain is not None and etcd_path is not None:
+            self.log.info('Using etcd to check whether {} is master'.format(self.datacenter))
+            self.etcd = etcd.Client(srv_domain=etcd_domain, protocol='https',
+                                    allow_reconnect=True)
+        else:
+            self.etcd = None
         #
         # events is a dict, of dicts.  The keys are the schemas that we're working
         # with.  It's necessary to operate at the schema level because the data
@@ -155,6 +169,41 @@ class Coal(object):
         for schema in self.schemas:
             # This value will be reset the first time a message is read from Kafka
             self.oldest_boundary[schema] = None
+
+    def is_master(self):
+        if self.etcd is None:
+            return True
+
+        if time.time() - self.master_last_updated < self.etcd_refresh:
+            # Whether this is the master data center was checked no more than
+            # etcd_refresh seconds ago
+            return self.master
+
+        # Update the last_update timestamp whether success or no -- don't want
+        # to pummel etcd if we're not able to update, and multiple instances
+        # writing wouldn't be that big a deal
+        self.master_last_updated = time.time()
+        try:
+            # >>> client.get('/conftool/v1/mediawiki-config/common/WMFMasterDatacenter').value
+            # u'{"val": "eqiad"}'
+            master_datacenter = json.loads(self.etcd.get(self.etcd_path).value)['val']
+            if master_datacenter == self.datacenter and not self.master:
+                self.log.info('{} is the master datacenter, going live'.format(
+                                self.datacenter))
+                self.master = True
+            elif master_datacenter != self.datacenter and self.master:
+                self.log.info('{} is not the master datacenter, disabling consumer'.format(
+                                self.datacenter))
+                self.master = False
+            else:
+                self.log.debug('{} was already the {} datacenter'.format(
+                                self.datacenter,
+                                'master' if master_datacenter == self.datacenter else 'secondary'))
+        except KeyError:
+            self.log.warning('etcd key {} may be malformed (KeyError raised)'.format(self.etcd_path))
+        except etcd.EtcdKeyNotFound:
+            self.log.warning('etcd key {} not found'.format(self.etcd_path))
+        return self.master
 
     def topic(self, schema):
         return 'eventlogging_{}'.format(schema)
@@ -447,8 +496,13 @@ class Coal(object):
         #     other aio libraries that aren't packaged natively.
         #
         # This method, as written, implements #1.
+        consumer = None
         while True:
             try:
+                if not self.is_master():
+                    time.sleep(self.etcd_refresh + 1)
+                    self.log.info('Checking whether datacenter has been promoted')
+                    continue
                 self.log.info('Starting Kafka connection to brokers ({}).'.format(
                     self.brokers))
                 consumer = KafkaConsumer(
@@ -465,6 +519,17 @@ class Coal(object):
                 self.log.info('Beginning poll cycle')
 
                 for message in consumer:
+                    # Check whether we should be running
+                    if not self.is_master():
+                        self.log.info('No longer running in the master datacenter')
+                        self.log.info('Committing and stopping consuming')
+                        for schema in self.schemas:
+                            offset_to_commit = self.flush_data(schema)
+                            if offset_to_commit is not None:
+                                self.commit(consumer, schema, offset_to_commit)
+                        consumer.close()
+                        break
+
                     # Message was received
                     if 'error' in message:
                         self.log.error('Kafka error: {}'.format(message.error))
@@ -498,6 +563,8 @@ class Coal(object):
             # Allow for a clean quit on interrupt
             except KeyboardInterrupt:
                 self.log.info('Stopping the Kafka consumer and shutting down')
+                if consumer is None:
+                    break
                 try:
                     # Take a stab at flushing any remaining data, just in case
                     self.log.info('Trying to commit any last data before exit')
@@ -530,6 +597,14 @@ def main():
                             type=int, default=2003, help='Graphite plaintext port')
     arg_parser.add_argument('--graphite-prefix', required=False, dest='graphite_prefix',
                             default='coal', help='Graphite metric path prefix')
+    arg_parser.add_argument('--datacenter', required=False, default=None,
+                            dest='datacenter', help='Current datacenter (eg, eqiad)')
+    arg_parser.add_argument('--etcd-domain', required=False, default=None,
+                            dest='etcd_domain', help='Domain to use for etcd srv lookup')
+    arg_parser.add_argument('--etcd-path', required=False, default=None,
+                            dest='etcd_path', help='Where to find the etcd MasterDatacenter value')
+    arg_parser.add_argument('--etcd-refresh', required=False, default=10,
+                            dest='etcd_refresh', help='Seconds to wait before refreshing etcd')
     arg_parser.add_argument('-n', '--dry-run', required=False, dest='dry_run',
                             action='store_true', default=False,
                             help='Don\'t send metrics, just log them')
@@ -543,6 +618,10 @@ def main():
                graphite_host=args.graphite_host,
                graphite_port=args.graphite_port,
                graphite_prefix=args.graphite_prefix,
+               datacenter=args.datacenter,
+               etcd_domain=args.etcd_domain,
+               etcd_path=args.etcd_path,
+               etcd_refresh=args.etcd_refresh,
                dry_run=args.dry_run,
                verbose=args.verbose)
     app.run()
