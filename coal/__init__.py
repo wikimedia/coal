@@ -580,34 +580,77 @@ class Coal(object):
                 self.log.exception('Unhandled exception caught, restarting consumer')
 
 
-def main():
+def main(cluster=None, config=None):
+    parsed_configs = {}
+    if cluster and config and cluster in config.sections():
+        parsed_configs = config[cluster]
+
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument('--brokers', required=True,
+    arg_parser.add_argument('--brokers',
+                            required=False if parsed_configs.get('brokers') else True,
+                            default=parsed_configs.get('brokers'),
                             help='Comma-separated list of Kafka brokers')
-    arg_parser.add_argument('--consumer-group', required=True,
-                            dest='consumer_group', help='Name of the Kafka consumer group')
-    arg_parser.add_argument('--schema', required=True, action='append',
+    arg_parser.add_argument('--consumer-group',
+                            required=False if parsed_configs.get('consumer_group') else True,
+                            default=parsed_configs.get('consumer_group'),
+                            dest='consumer_group',
+                            help='Name of the Kafka consumer group')
+    arg_parser.add_argument('--schema',
+                            required=False if parsed_configs.get('schemas') else True,
+                            default=[schema.strip() for schema in parsed_configs.get('schemas', '').split(',')
+                                     if parsed_configs.get('schemas')],
+                            action='append',
                             dest='schemas',
                             help='Schemas that we deal with, topic names are derived')
-    arg_parser.add_argument('--graphite-host', required=True, dest='graphite_host',
+    arg_parser.add_argument('--graphite-host',
+                            required=False if parsed_configs.get('graphite_host') else True,
+                            default=parsed_configs.get('graphite_host'),
+                            dest='graphite_host',
                             help='Host to which graphite metrics are sent')
-    arg_parser.add_argument('--graphite-port', required=False, dest='graphite_port',
-                            type=int, default=2003, help='Graphite plaintext port')
-    arg_parser.add_argument('--graphite-prefix', required=False, dest='graphite_prefix',
-                            default='coal', help='Graphite metric path prefix')
-    arg_parser.add_argument('--datacenter', required=False, default=None,
-                            dest='datacenter', help='Current datacenter (eg, eqiad)')
-    arg_parser.add_argument('--etcd-domain', required=False, default=None,
-                            dest='etcd_domain', help='Domain to use for etcd srv lookup')
-    arg_parser.add_argument('--etcd-path', required=False, default=None,
-                            dest='etcd_path', help='Where to find the etcd MasterDatacenter value')
-    arg_parser.add_argument('--etcd-refresh', required=False, default=10,
-                            dest='etcd_refresh', help='Seconds to wait before refreshing etcd')
-    arg_parser.add_argument('-n', '--dry-run', required=False, dest='dry_run',
-                            action='store_true', default=False,
+    arg_parser.add_argument('--graphite-port',
+                            required=False,
+                            dest='graphite_port',
+                            type=int,
+                            default=int(parsed_configs.get('graphite_port', 2003)),
+                            help='Graphite plaintext port')
+    arg_parser.add_argument('--graphite-prefix',
+                            required=False,
+                            dest='graphite_prefix',
+                            default=parsed_configs.get('graphite_prefix', 'coal'),
+                            help='Graphite metric path prefix')
+    arg_parser.add_argument('--datacenter',
+                            required=False,
+                            default=cluster,
+                            dest='datacenter',
+                            help='Current datacenter (eg, eqiad)')
+    arg_parser.add_argument('--etcd-domain',
+                            required=False,
+                            default=parsed_configs.get('etcd_domain'),
+                            dest='etcd_domain',
+                            help='Domain to use for etcd srv lookup')
+    arg_parser.add_argument('--etcd-path',
+                            required=False,
+                            default=parsed_configs.get('etcd_path'),
+                            dest='etcd_path',
+                            help='Where to find the etcd MasterDatacenter value')
+    arg_parser.add_argument('--etcd-refresh',
+                            required=False,
+                            default=10,
+                            dest='etcd_refresh',
+                            help='Seconds to wait before refreshing etcd')
+    arg_parser.add_argument('-n',
+                            '--dry-run',
+                            required=False,
+                            dest='dry_run',
+                            action='store_true',
+                            default=False,
                             help='Don\'t send metrics, just log them')
-    arg_parser.add_argument('-v', '--verbose', dest='verbose',
-                            required=False, default=False, action='store_true',
+    arg_parser.add_argument('-v',
+                            '--verbose',
+                            dest='verbose',
+                            required=False,
+                            default=False,
+                            action='store_true',
                             help='Increase verbosity of output')
     args = arg_parser.parse_args()
     app = Coal(brokers=args.brokers,
