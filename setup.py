@@ -21,14 +21,14 @@ setup(
         'flask',
         'numpy',
         'pytz',
-        'python-etcd'
+        'python-etcd',
+        'requests'
     ],
     test_suite='nose.collector',
     tests_require=['nose'],
     entry_points={
         'console_scripts': [
-            'coal = coal:main',
-            'coal-web = coal.coal_web:main'
+            'coal = coal:main'
         ],
     }
 )

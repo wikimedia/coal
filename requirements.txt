@@ -5,3 +5,4 @@ flask
 numpy
 pytz
 python-etcd
+requests
