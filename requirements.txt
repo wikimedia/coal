@@ -6,3 +6,4 @@ numpy
 pytz
 python-etcd
 requests
+werkzeug

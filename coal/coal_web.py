@@ -24,9 +24,11 @@ from __future__ import division
 import argparse
 import flask
 import numpy
+import os
 import requests
 import time
-import werkzeug.contrib.cache
+
+from werkzeug.contrib.cache import FileSystemCache, NullCache
 
 
 METRICS = (
@@ -55,8 +57,13 @@ CACHE_RETENTION = {
 
 }
 
+CACHE_DIR = '/var/cache/coal_web'
+
 app = flask.Flask(__name__)
-cache = werkzeug.contrib.cache.SimpleCache()
+if os.access(CACHE_DIR, os.W_OK):
+    cache = FileSystemCache(CACHE_DIR)
+else:
+    cache = NullCache()
 
 
 @app.after_request
