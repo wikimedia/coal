@@ -47,16 +47,6 @@ PERIODS = {
     'year':  int(60 * 60 * 24 * 365.25),
 }
 
-CACHE_RETENTION = {
-    # seconds to cache values
-    'hour': 30,
-    'day': 30,
-    'week': 60,
-    'month': 300,
-    'year': 21600   # 6 hours, since this takes a while to generate
-
-}
-
 CACHE_DIR = '/var/cache/coal_web'
 
 app = flask.Flask(__name__)
@@ -172,15 +162,14 @@ def get_metrics():
     response = flask.jsonify(
         start=data['start'],
         end=data['end'],
-        step=period // 60,
+        step=data['step'],
         points=points
     )
+    # Set a max age equal to half a step from the final sample.
+    cache_retention = data['step'] // 2
     if not app.debug:
-        # Only cache if we're not running in debug mode
-        # Cache year metrics for 6 hours, since they take a long time to generate.
-        # Cache others for 30 seconds.
-        cache.set(flask.request.full_path, response, timeout=CACHE_RETENTION[period_name])
-    response.cache_control.max_age = CACHE_RETENTION[period_name]
+        cache.set(flask.request.full_path, response, cache_retention)
+    response.cache_control.max_age = cache_retention
     response.cache_control.public = True
     app.logger.debug('{} seconds to return metrics for period {}'.format(time.time() - fetch_start, period_name))
     return response
