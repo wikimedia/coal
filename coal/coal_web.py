@@ -69,7 +69,8 @@ else:
 @app.after_request
 def add_header(response):
     """Add CORS and Cache-Control headers to the response."""
-    response.cache_control.max_age = 30
+    if not response.cache_control:
+        response.cache_control.max_age = 30
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET'
     return response
@@ -179,6 +180,8 @@ def get_metrics():
         # Cache year metrics for 6 hours, since they take a long time to generate.
         # Cache others for 30 seconds.
         cache.set(flask.request.full_path, response, timeout=CACHE_RETENTION[period_name])
+    response.cache_control.max_age = CACHE_RETENTION[period_name]
+    response.cache_control.public = True
     app.logger.debug('{} seconds to return metrics for period {}'.format(time.time() - fetch_start, period_name))
     return response
 
