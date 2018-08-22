@@ -151,7 +151,7 @@ def get_metrics():
     response = None
     if not app.debug:
         # Don't check the cache if we're in debug mode
-        response = cache.get(flask.request.url)
+        response = cache.get(flask.request.full_path)
     if response is not None:
         return response
     fetch_start = time.time()
@@ -178,7 +178,7 @@ def get_metrics():
         # Only cache if we're not running in debug mode
         # Cache year metrics for 6 hours, since they take a long time to generate.
         # Cache others for 30 seconds.
-        cache.set(flask.request.url, response, timeout=CACHE_RETENTION[period_name])
+        cache.set(flask.request.full_path, response, timeout=CACHE_RETENTION[period_name])
     app.logger.debug('{} seconds to return metrics for period {}'.format(time.time() - fetch_start, period_name))
     return response
 
