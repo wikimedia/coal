@@ -167,10 +167,10 @@ def get_metrics():
     )
     # Set a max age equal to half a step from the final sample.
     cache_retention = data['step'] // 2
-    if not app.debug:
-        cache.set(flask.request.full_path, response, cache_retention)
     response.cache_control.max_age = cache_retention
     response.cache_control.public = True
+    if not app.debug:
+        cache.set(flask.request.full_path, response, cache_retention)
     app.logger.debug('{} seconds to return metrics for period {}'.format(time.time() - fetch_start, period_name))
     return response
 
