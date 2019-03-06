@@ -70,6 +70,7 @@ class Coal(object):
         'secureConnectionStart',
         'unloadEventStart',
         'unloadEventEnd',
+        'startTime',
     )
     ARCHIVES = [(UPDATE_INTERVAL, RETENTION)]
 
@@ -251,6 +252,19 @@ class Coal(object):
                     # in case...
                     pass
 
+    def rewrite_indirect_metric(self, schema, metric, event):
+        # For the PaintTiming schema, which holds multiple metrics in the same fields
+        if metric == 'startTime':
+            eventName = event.get('name')
+            if schema == 'PaintTiming' and eventName == 'first-paint':
+                return 'firstPaint'
+            elif schema == 'PaintTiming' and eventName == 'first-contentful-paint':
+                return 'firstContentfulPaint'
+            else:
+                return False  # Don't store unexpected values as new coal metrics
+
+        return metric
+
     #
     # Process an incoming event
     #
@@ -318,6 +332,13 @@ class Coal(object):
         event = meta['event']
         for metric in self.METRICS:
             value = event.get(metric)
+
+            metric = self.rewrite_indirect_metric(schema, metric, event)
+
+            # Invalid/unexpected indirect metric, skip
+            if not metric:
+                continue
+
             if value:
                 if metric not in self.events[schema][minute_boundary]:
                     self.events[schema][minute_boundary][metric] = []
