@@ -77,7 +77,7 @@ class Coal(object):
     def __init__(self, brokers, consumer_group, schemas, graphite_host,
                  graphite_port=2003, graphite_prefix='coal', datacenter=None,
                  etcd_domain=None, etcd_path=None, etcd_refresh=10, dry_run=False,
-                 verbose=False):
+                 verbose=False, start_timestamp=False):
         self.brokers = brokers
         self.consumer_group = consumer_group
         self.schemas = schemas
@@ -113,6 +113,8 @@ class Coal(object):
                                     allow_reconnect=True)
         else:
             self.etcd = None
+        self.start_timestamp = start_timestamp
+
         #
         # events is a dict, of dicts.  The keys are the schemas that we're working
         # with.  It's necessary to operate at the schema level because the data
@@ -532,8 +534,31 @@ class Coal(object):
                 # Work out topic names based on schemas, and subscribe to the
                 # appropriate topics
                 topics = [self.topic(schema) for schema in self.schemas]
-                self.log.info('Subscribing to topics: {}'.format(topics))
-                consumer.subscribe(topics)
+
+                # Seek specific start times that might have been specified
+                if self.start_timestamp:
+                    self.log.info('Starting consumption at timestamp: %d' % self.start_timestamp)
+                    timestamps = {}
+                    for topic in topics:
+                        timestamps[TopicPartition(topic, 0)] = self.start_timestamp
+
+                    self.log.info('Fetching offsets for {}'.format(timestamps))
+
+                    offsets = consumer.offsets_for_times(timestamps)
+
+                    self.log.info('Fetched offsets: {}'.format(offsets))
+
+                    self.log.info('Assigning partitions {}'.format(timestamps.keys()))
+                    consumer.assign(timestamps.keys())
+
+                    for topic_partition, offset_and_timestamp in offsets.items():
+                        self.log.info(
+                            'Seeking offset {} for partition {}'.format(offset_and_timestamp[0], topic_partition)
+                        )
+                        consumer.seek(topic_partition, offset_and_timestamp[0])
+                else:
+                    self.log.info('Subscribing to topics: {}'.format(topics))
+                    consumer.subscribe(topics)
 
                 self.log.info('Beginning poll cycle')
 
@@ -673,6 +698,12 @@ def main(cluster=None, config=None):
                             default=False,
                             action='store_true',
                             help='Increase verbosity of output')
+    arg_parser.add_argument('--start-timestamp',
+                            dest='start_timestamp',
+                            type=int,
+                            required=False,
+                            default=False,
+                            help='Start consuming at particular time, specified as a UNIX timestamp')
     args = arg_parser.parse_args()
     app = Coal(brokers=args.brokers,
                consumer_group=args.consumer_group,
@@ -685,7 +716,8 @@ def main(cluster=None, config=None):
                etcd_path=args.etcd_path,
                etcd_refresh=args.etcd_refresh,
                dry_run=args.dry_run,
-               verbose=args.verbose)
+               verbose=args.verbose,
+               start_timestamp=args.start_timestamp)
     app.run()
 
 
