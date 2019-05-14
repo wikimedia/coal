@@ -703,7 +703,8 @@ def main(cluster=None, config=None):
                             type=int,
                             required=False,
                             default=False,
-                            help='Start consuming at particular time, specified as a UNIX timestamp')
+                            help="""Start consuming at particular time,
+                                specified as a UNIX timestamp expressed in milliseconds""")
     args = arg_parser.parse_args()
     app = Coal(brokers=args.brokers,
                consumer_group=args.consumer_group,
