@@ -579,7 +579,7 @@ class Coal(object):
                         self.log.error('Kafka error: {}'.format(message.error))
                     else:
                         try:
-                            value = json.loads(message.value)
+                            value = json.loads(message.value.decode('utf-8'))
                         except ValueError:
                             # If incoming messages aren't well-formatted, log them
                             # so we can see that and handle it.
