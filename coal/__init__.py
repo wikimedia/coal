@@ -234,7 +234,7 @@ class Coal(object):
                                                 timeout=5)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.send('{}.{} {} {}\n'.format(self.graphite_prefix, metric, value,
-                                                 timestamp))
+                                                 timestamp).encode())
                 self.log.debug('[{}] [{}] Submitted {} to graphite at key {}.{}'.format(
                     metric, timestamp, value, self.graphite_prefix, metric))
             except Exception:
