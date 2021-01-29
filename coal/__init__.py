@@ -283,6 +283,11 @@ class Coal(object):
             self.log.warning('Message received with no schema defined')
             return None
 
+        # Canary events are fake events used to monitor the event pipeline
+        if 'meta' in meta and 'domain' in meta['meta'] and meta['meta']['domain'] == 'canary':
+            self.log.info('Canary event')
+            return None
+
         if schema not in self.schemas:
             self.log.warning('Message received with invalid schema')
             return None
